@@ -5,9 +5,10 @@ using UnityEngine.Events;
 /// <summary>
 /// Déclencheur invisible (BoxCollider2D en mode Trigger) placé à un métrage fixe.
 /// Quand le joueur le traverse, il demande au TwistManager d'exécuter les effets choisis
-/// (ambiance sombre, screamer, inversion, ralenti...) et lance un UnityEvent optionnel.
+/// avec les réglages PROPRES à cette zone (durées, ralenti, fondus...).
 /// 
-/// Utilisation : un GameObject vide + ce script, puis régler "Trigger At Meters" et les effets.
+/// Utilisation : un GameObject vide + ce script, puis régler "Trigger At Meters", les effets
+/// et les réglages de chaque effet coché.
 /// Après une mort, RespawnManager appelle TriggerZone.ResetAll() pour réarmer toutes les zones.
 /// </summary>
 [RequireComponent(typeof(BoxCollider2D))]
@@ -24,13 +25,8 @@ public class TriggerZone : MonoBehaviour
 
     [Header("Twist déclenché")]
     [SerializeField] private TwistEffects effects = TwistEffects.None;
-    [Tooltip("Durée (secondes réelles) de l'inversion, du ralenti et de l'ambiance sombre.")]
-    [SerializeField] private float twistDuration = 3f;
-    [Range(0.1f, 1f)]
-    [Tooltip("Valeur de Time.timeScale pendant le ralenti.")]
-    [SerializeField] private float slowMotionScale = 0.35f;
-    [Tooltip("Si activé, l'ambiance sombre disparaît après 'Twist Duration' secondes. Sinon elle reste.")]
-    [SerializeField] private bool revertAmbiance = true;
+    [Tooltip("Réglages propres à cette zone. Seuls ceux des effets cochés ci-dessus servent.")]
+    [SerializeField] private TwistSettings settings = new TwistSettings();
 
     [Header("Options")]
     [SerializeField] private bool triggerOnce = true;
@@ -83,7 +79,7 @@ public class TriggerZone : MonoBehaviour
             GameManager.Instance.NotifyZoneReached(name, triggerAtMeters);
 
         if (effects != TwistEffects.None && TwistManager.Instance != null)
-            TwistManager.Instance.ExecuteTwist(effects, twistDuration, slowMotionScale, revertAmbiance);
+            TwistManager.Instance.ExecuteTwist(effects, settings);
 
         onTriggered?.Invoke();
     }

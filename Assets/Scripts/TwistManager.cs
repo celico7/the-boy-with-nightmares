@@ -18,8 +18,43 @@ public enum TwistEffects
 }
 
 /// <summary>
+/// Réglages d'un twist. Chaque TriggerZone possède sa propre copie :
+/// on peut donc régler chaque twist indépendamment des autres.
+/// Seuls les réglages des effets cochés dans la zone sont utilisés.
+/// </summary>
+[Serializable]
+public class TwistSettings
+{
+    [Header("Ambiance sombre")]
+    [Tooltip("Durée (s) du fondu vers l'ambiance sombre.")]
+    public float ambianceFadeInTime = 0.5f;
+    [Tooltip("Si coché, l'ambiance revient à la normale. Sinon elle reste sombre définitivement.")]
+    public bool revertAmbiance = true;
+    [Tooltip("Durée (s) pendant laquelle l'ambiance reste sombre, une fois le fondu terminé.")]
+    public float ambianceHoldTime = 3f;
+    [Tooltip("Durée (s) du fondu de retour à la normale.")]
+    public float ambianceFadeOutTime = 0.5f;
+
+    [Header("Screamer")]
+    [Tooltip("Durée totale (s) du flash.")]
+    public float screamerDuration = 0.2f;
+
+    [Header("Inversion des touches")]
+    [Tooltip("Durée (s réelles) pendant laquelle les touches sont inversées.")]
+    public float invertDuration = 3f;
+
+    [Header("Ralenti")]
+    [Tooltip("Durée (s réelles) du ralenti.")]
+    public float slowMotionDuration = 3f;
+    [Range(0.05f, 1f)]
+    [Tooltip("Valeur de Time.timeScale pendant le ralenti (1 = normal).")]
+    public float slowMotionScale = 0.35f;
+}
+
+/// <summary>
 /// Exécute les twists : ambiance, screamer et modificateurs de gameplay.
 /// Toutes les durées utilisent le temps réel (unscaled) pour rester correctes pendant le ralenti.
+/// Les durées et intensités viennent des TwistSettings de chaque TriggerZone.
 /// 
 /// Ambiance : on mélange (1) la couleur de fond de la caméra, (2) la teinte de sprites de décor,
 /// (3) le poids d'un Volume "sombre/monochrome", (4) optionnellement la Global Light 2D.
@@ -32,26 +67,23 @@ public class TwistManager : MonoBehaviour
     [SerializeField] private PlayerController player;
     [SerializeField] private Camera mainCamera;
 
-    [Header("Ambiance sombre")]
+    [Header("Ambiance sombre : rendu")]
     [SerializeField] private Color darkBackgroundColor = new Color(0.04f, 0.04f, 0.06f);
     [Tooltip("Volume global (priorité haute) avec saturation -100 + vignette. Son poids est piloté par le script.")]
     [SerializeField] private Volume darkVolume;
     [Tooltip("Sprites de décor à assombrir (ciel, nuages, collines...).")]
     [SerializeField] private SpriteRenderer[] backgroundSprites;
     [SerializeField] private Color darkSpriteTint = new Color(0.3f, 0.3f, 0.3f);
-    [Tooltip("Durée (s) du fondu vers l'ambiance sombre, puis du retour à la normale.")]
-    [SerializeField] private float ambianceTransitionTime = 1.5f;
 
     [Header("Ambiance sombre : Global Light 2D (optionnel)")]
     [SerializeField] private Light2D globalLight;
     [SerializeField] private Color darkLightColor = new Color(0.35f, 0.4f, 0.65f);
     [SerializeField] private float darkLightIntensity = 0.35f;
 
-    [Header("Screamer")]
+    [Header("Screamer : rendu")]
     [Tooltip("Image UI plein écran (Raycast Target désactivé).")]
     [SerializeField] private Image screamerPanel;
-    [SerializeField] private float screamerDuration = 0.2f;
-    [Tooltip("Couleurs alternées pendant le flash (réparties sur la durée).")]
+    [Tooltip("Couleurs alternées pendant le flash (réparties sur la durée du screamer).")]
     [SerializeField] private Color[] flashColors = { Color.white, Color.black, Color.white, Color.black };
     [Tooltip("Son optionnel joué au déclenchement.")]
     [SerializeField] private AudioSource screamerAudio;
@@ -112,21 +144,30 @@ public class TwistManager : MonoBehaviour
     // ------------------------------------------------------------------
     // Point d'entrée principal (appelé par TriggerZone)
     // ------------------------------------------------------------------
-    /// <param name="revertAmbiance">Si vrai, l'ambiance sombre disparaît après "duration" secondes.</param>
-    public void ExecuteTwist(TwistEffects effects, float duration = 3f, float slowScale = 0.35f,
-                             bool revertAmbiance = false)
+    public void ExecuteTwist(TwistEffects effects, TwistSettings settings)
     {
-        if (Has(effects, TwistEffects.DarkAmbiance))
-            SetDarkAmbiance(true, revertAmbiance ? duration : 0f);
+        if (settings == null) settings = new TwistSettings();
 
-        if (Has(effects, TwistEffects.Screamer)) TriggerScreamer();
+        if (Has(effects, TwistEffects.DarkAmbiance))
+        {
+            SetDarkAmbiance(true,
+                settings.ambianceFadeInTime,
+                settings.revertAmbiance ? settings.ambianceHoldTime : 0f,
+                settings.ambianceFadeOutTime);
+        }
+
+        if (Has(effects, TwistEffects.Screamer))
+            TriggerScreamer(settings.screamerDuration);
 
         // Twist aléatoire : on ajoute une des deux options de gameplay.
         if (Has(effects, TwistEffects.RandomGameplayTwist))
             effects |= UnityEngine.Random.value < 0.5f ? TwistEffects.InvertControls : TwistEffects.SlowMotion;
 
-        if (Has(effects, TwistEffects.InvertControls)) InvertControls(duration);
-        if (Has(effects, TwistEffects.SlowMotion)) SlowMotion(duration, slowScale);
+        if (Has(effects, TwistEffects.InvertControls))
+            InvertControls(settings.invertDuration);
+
+        if (Has(effects, TwistEffects.SlowMotion))
+            SlowMotion(settings.slowMotionDuration, settings.slowMotionScale);
     }
 
     private static bool Has(TwistEffects value, TwistEffects flag) => (value & flag) != 0;
@@ -154,38 +195,40 @@ public class TwistManager : MonoBehaviour
     // ------------------------------------------------------------------
     // Ambiance
     // ------------------------------------------------------------------
+    /// <param name="fadeInTime">Durée du fondu vers l'ambiance (ou vers le clair si dark = false).</param>
     /// <param name="revertAfter">
     /// &gt; 0 : une fois le fondu terminé, l'ambiance reste sombre ce nombre de secondes puis revient.
     /// 0 : l'ambiance reste sombre définitivement.
     /// </param>
-    public void SetDarkAmbiance(bool dark, float revertAfter = 0f)
+    /// <param name="fadeOutTime">Durée du fondu de retour à la normale.</param>
+    public void SetDarkAmbiance(bool dark, float fadeInTime = 0.5f, float revertAfter = 0f, float fadeOutTime = 0.5f)
     {
         if (ambianceRoutine != null) StopCoroutine(ambianceRoutine);
-        ambianceRoutine = StartCoroutine(AmbianceRoutine(dark ? 1f : 0f, revertAfter));
+        ambianceRoutine = StartCoroutine(AmbianceRoutine(dark ? 1f : 0f, fadeInTime, revertAfter, fadeOutTime));
     }
 
-    private IEnumerator AmbianceRoutine(float target, float revertAfter)
+    private IEnumerator AmbianceRoutine(float target, float fadeInTime, float revertAfter, float fadeOutTime)
     {
-        yield return FadeAmbiance(target);
+        yield return FadeAmbiance(target, fadeInTime);
 
         if (target > 0f && revertAfter > 0f)
         {
             yield return new WaitForSecondsRealtime(revertAfter);
-            yield return FadeAmbiance(0f);
+            yield return FadeAmbiance(0f, fadeOutTime);
         }
 
         ambianceRoutine = null;
     }
 
-    private IEnumerator FadeAmbiance(float target)
+    private IEnumerator FadeAmbiance(float target, float fadeTime)
     {
         float from = ambianceLevel;
         float t = 0f;
 
-        while (ambianceTransitionTime > 0f && t < ambianceTransitionTime)
+        while (fadeTime > 0f && t < fadeTime)
         {
             t += Time.unscaledDeltaTime;
-            ApplyAmbiance(Mathf.Lerp(from, target, t / ambianceTransitionTime));
+            ApplyAmbiance(Mathf.Lerp(from, target, t / fadeTime));
             yield return null;
         }
 
@@ -221,14 +264,16 @@ public class TwistManager : MonoBehaviour
     // ------------------------------------------------------------------
     // Screamer (flash noir/blanc)
     // ------------------------------------------------------------------
-    public void TriggerScreamer()
+    public void TriggerScreamer() => TriggerScreamer(0.2f);
+
+    public void TriggerScreamer(float duration)
     {
         if (screamerPanel == null) return;
         if (screamerRoutine != null) StopCoroutine(screamerRoutine);
-        screamerRoutine = StartCoroutine(ScreamerRoutine());
+        screamerRoutine = StartCoroutine(ScreamerRoutine(duration));
     }
 
-    private IEnumerator ScreamerRoutine()
+    private IEnumerator ScreamerRoutine(float duration)
     {
         if (screamerAudio != null) screamerAudio.Play();
 
@@ -236,7 +281,7 @@ public class TwistManager : MonoBehaviour
             ? flashColors
             : new[] { Color.white };
 
-        float step = screamerDuration / colors.Length;
+        float step = Mathf.Max(0.01f, duration) / colors.Length;
         foreach (Color c in colors)
         {
             screamerPanel.color = c;
