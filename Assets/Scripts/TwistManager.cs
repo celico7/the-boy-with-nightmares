@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 using UnityEngine.UI;
 
 /// <summary>Effets combinables (case à cocher multiple dans l'inspecteur de TriggerZone).</summary>
@@ -21,7 +22,7 @@ public enum TwistEffects
 /// Toutes les durées utilisent le temps réel (unscaled) pour rester correctes pendant le ralenti.
 /// 
 /// Ambiance : on mélange (1) la couleur de fond de la caméra, (2) la teinte de sprites de décor,
-/// (3) le poids d'un Volume "sombre/monochrome" (URP : Color Adjustments saturation -100, Vignette...).
+/// (3) le poids d'un Volume "sombre/monochrome", (4) optionnellement la Global Light 2D.
 /// </summary>
 public class TwistManager : MonoBehaviour
 {
@@ -33,12 +34,18 @@ public class TwistManager : MonoBehaviour
 
     [Header("Ambiance sombre")]
     [SerializeField] private Color darkBackgroundColor = new Color(0.04f, 0.04f, 0.06f);
-    [Tooltip("Volume global (priorité haute, poids 0 au départ) avec saturation -100 + vignette.")]
+    [Tooltip("Volume global (priorité haute) avec saturation -100 + vignette. Son poids est piloté par le script.")]
     [SerializeField] private Volume darkVolume;
     [Tooltip("Sprites de décor à assombrir (ciel, nuages, collines...).")]
     [SerializeField] private SpriteRenderer[] backgroundSprites;
     [SerializeField] private Color darkSpriteTint = new Color(0.3f, 0.3f, 0.3f);
+    [Tooltip("Durée (s) du fondu vers l'ambiance sombre, puis du retour à la normale.")]
     [SerializeField] private float ambianceTransitionTime = 1.5f;
+
+    [Header("Ambiance sombre : Global Light 2D (optionnel)")]
+    [SerializeField] private Light2D globalLight;
+    [SerializeField] private Color darkLightColor = new Color(0.35f, 0.4f, 0.65f);
+    [SerializeField] private float darkLightIntensity = 0.35f;
 
     [Header("Screamer")]
     [Tooltip("Image UI plein écran (Raycast Target désactivé).")]
@@ -52,6 +59,8 @@ public class TwistManager : MonoBehaviour
     private float defaultFixedDelta;
     private Color lightBackgroundColor;
     private Color[] originalSpriteColors;
+    private Color lightColorOriginal;
+    private float lightIntensityOriginal;
     private float ambianceLevel; // 0 = clair, 1 = sombre
 
     private Coroutine ambianceRoutine;
@@ -82,6 +91,12 @@ public class TwistManager : MonoBehaviour
                     originalSpriteColors[i] = backgroundSprites[i].color;
         }
 
+        if (globalLight != null)
+        {
+            lightColorOriginal = globalLight.color;
+            lightIntensityOriginal = globalLight.intensity;
+        }
+
         if (darkVolume != null) darkVolume.weight = 0f;
         if (screamerPanel != null) screamerPanel.color = Color.clear;
     }
@@ -97,9 +112,13 @@ public class TwistManager : MonoBehaviour
     // ------------------------------------------------------------------
     // Point d'entrée principal (appelé par TriggerZone)
     // ------------------------------------------------------------------
-    public void ExecuteTwist(TwistEffects effects, float duration = 3f, float slowScale = 0.35f)
+    /// <param name="revertAmbiance">Si vrai, l'ambiance sombre disparaît après "duration" secondes.</param>
+    public void ExecuteTwist(TwistEffects effects, float duration = 3f, float slowScale = 0.35f,
+                             bool revertAmbiance = false)
     {
-        if (Has(effects, TwistEffects.DarkAmbiance)) SetDarkAmbiance(true);
+        if (Has(effects, TwistEffects.DarkAmbiance))
+            SetDarkAmbiance(true, revertAmbiance ? duration : 0f);
+
         if (Has(effects, TwistEffects.Screamer)) TriggerScreamer();
 
         // Twist aléatoire : on ajoute une des deux options de gameplay.
@@ -112,16 +131,53 @@ public class TwistManager : MonoBehaviour
 
     private static bool Has(TwistEffects value, TwistEffects flag) => (value & flag) != 0;
 
+    /// <summary>
+    /// Remet tout à zéro (ambiance, screamer, inversion, ralenti). Appelé à chaque respawn.
+    /// </summary>
+    public void ResetAll()
+    {
+        StopAllCoroutines();
+        ambianceRoutine = null;
+        screamerRoutine = null;
+        invertRoutine = null;
+        slowRoutine = null;
+
+        SetTimeScale(1f);
+        if (player != null) player.isInverted = false;
+
+        if (screamerAudio != null) screamerAudio.Stop();
+        if (screamerPanel != null) screamerPanel.color = Color.clear;
+
+        ApplyAmbiance(0f);
+    }
+
     // ------------------------------------------------------------------
     // Ambiance
     // ------------------------------------------------------------------
-    public void SetDarkAmbiance(bool dark)
+    /// <param name="revertAfter">
+    /// &gt; 0 : une fois le fondu terminé, l'ambiance reste sombre ce nombre de secondes puis revient.
+    /// 0 : l'ambiance reste sombre définitivement.
+    /// </param>
+    public void SetDarkAmbiance(bool dark, float revertAfter = 0f)
     {
         if (ambianceRoutine != null) StopCoroutine(ambianceRoutine);
-        ambianceRoutine = StartCoroutine(AmbianceRoutine(dark ? 1f : 0f));
+        ambianceRoutine = StartCoroutine(AmbianceRoutine(dark ? 1f : 0f, revertAfter));
     }
 
-    private IEnumerator AmbianceRoutine(float target)
+    private IEnumerator AmbianceRoutine(float target, float revertAfter)
+    {
+        yield return FadeAmbiance(target);
+
+        if (target > 0f && revertAfter > 0f)
+        {
+            yield return new WaitForSecondsRealtime(revertAfter);
+            yield return FadeAmbiance(0f);
+        }
+
+        ambianceRoutine = null;
+    }
+
+    private IEnumerator FadeAmbiance(float target)
     {
         float from = ambianceLevel;
         float t = 0f;
@@ -134,7 +190,6 @@ public class TwistManager : MonoBehaviour
         }
 
         ApplyAmbiance(target);
-        ambianceRoutine = null;
     }
 
     private void ApplyAmbiance(float k)
@@ -147,7 +202,13 @@ public class TwistManager : MonoBehaviour
         if (darkVolume != null)
             darkVolume.weight = k;
 
-        if (backgroundSprites != null)
+        if (globalLight != null)
+        {
+            globalLight.color = Color.Lerp(lightColorOriginal, darkLightColor, k);
+            globalLight.intensity = Mathf.Lerp(lightIntensityOriginal, darkLightIntensity, k);
+        }
+
+        if (backgroundSprites != null && originalSpriteColors != null)
         {
             for (int i = 0; i < backgroundSprites.Length; i++)
             {

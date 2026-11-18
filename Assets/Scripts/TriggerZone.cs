@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
 
@@ -7,10 +8,14 @@ using UnityEngine.Events;
 /// (ambiance sombre, screamer, inversion, ralenti...) et lance un UnityEvent optionnel.
 /// 
 /// Utilisation : un GameObject vide + ce script, puis régler "Trigger At Meters" et les effets.
+/// Après une mort, RespawnManager appelle TriggerZone.ResetAll() pour réarmer toutes les zones.
 /// </summary>
 [RequireComponent(typeof(BoxCollider2D))]
 public class TriggerZone : MonoBehaviour
 {
+    // Registre de toutes les zones actives, pour pouvoir les réarmer après un respawn.
+    private static readonly List<TriggerZone> allZones = new List<TriggerZone>();
+
     [Header("Position")]
     [Tooltip("Métrage auquel la zone se trouve (ex : 200, 500, 800).")]
     [SerializeField] private float triggerAtMeters = 200f;
@@ -19,11 +24,13 @@ public class TriggerZone : MonoBehaviour
 
     [Header("Twist déclenché")]
     [SerializeField] private TwistEffects effects = TwistEffects.None;
-    [Tooltip("Durée (secondes réelles) de l'inversion ou du ralenti.")]
+    [Tooltip("Durée (secondes réelles) de l'inversion, du ralenti et de l'ambiance sombre.")]
     [SerializeField] private float twistDuration = 3f;
     [Range(0.1f, 1f)]
     [Tooltip("Valeur de Time.timeScale pendant le ralenti.")]
     [SerializeField] private float slowMotionScale = 0.35f;
+    [Tooltip("Si activé, l'ambiance sombre disparaît après 'Twist Duration' secondes. Sinon elle reste.")]
+    [SerializeField] private bool revertAmbiance = true;
 
     [Header("Options")]
     [SerializeField] private bool triggerOnce = true;
@@ -31,6 +38,13 @@ public class TriggerZone : MonoBehaviour
     [SerializeField] private UnityEvent onTriggered;
 
     private bool hasTriggered;
+
+    /// <summary>Réarme toutes les zones (appelé après une mort).</summary>
+    public static void ResetAll()
+    {
+        foreach (TriggerZone zone in allZones)
+            zone.hasTriggered = false;
+    }
 
     // Appelé quand on ajoute le composant : configure la zone correctement.
     private void Reset()
@@ -44,6 +58,9 @@ public class TriggerZone : MonoBehaviour
     {
         GetComponent<BoxCollider2D>().isTrigger = true; // sécurité
     }
+
+    private void OnEnable() => allZones.Add(this);
+    private void OnDisable() => allZones.Remove(this);
 
     private void Start()
     {
@@ -66,7 +83,7 @@ public class TriggerZone : MonoBehaviour
             GameManager.Instance.NotifyZoneReached(name, triggerAtMeters);
 
         if (effects != TwistEffects.None && TwistManager.Instance != null)
-            TwistManager.Instance.ExecuteTwist(effects, twistDuration, slowMotionScale);
+            TwistManager.Instance.ExecuteTwist(effects, twistDuration, slowMotionScale, revertAmbiance);
 
         onTriggered?.Invoke();
     }

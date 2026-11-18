@@ -169,6 +169,38 @@ public class PlayerController : MonoBehaviour
     }
 
     // ------------------------------------------------------------------
+    // Mort / respawn (appelé par RespawnManager)
+    // ------------------------------------------------------------------
+
+    /// <summary>Fige le joueur (physique + input) ou le libère.</summary>
+    public void SetFrozen(bool frozen)
+    {
+        if (frozen)
+        {
+            rb.linearVelocity = Vector2.zero;
+            rb.simulated = false;
+            enabled = false;   // coupe Update/FixedUpdate et les actions d'input
+        }
+        else
+        {
+            rb.simulated = true;
+            enabled = true;
+        }
+    }
+
+    /// <summary>Remet le joueur dans son état de départ (glissade, inversion, timers, vitesse).</summary>
+    public void ResetState()
+    {
+        if (IsSliding) EndSlide();
+        isInverted = false;
+        coyoteCounter = 0f;
+        jumpBufferCounter = 0f;
+        moveInput = 0f;
+        rb.gravityScale = baseGravityScale;
+        rb.linearVelocity = Vector2.zero;
+    }
+
+    // ------------------------------------------------------------------
     // Input
     // ------------------------------------------------------------------
     private void ReadInput(out bool jumpPressed, out bool slidePressed)

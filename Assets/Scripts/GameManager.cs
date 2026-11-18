@@ -87,6 +87,14 @@ public class GameManager : MonoBehaviour
             distanceText.text = string.Format(distanceFormat, meters);
     }
 
+    /// <summary>Remet le compteur à zéro (appelé après un respawn).</summary>
+    public void ResetRun()
+    {
+        DistanceMeters = 0f;
+        RefreshUI(0);
+        OnDistanceChanged?.Invoke(0f);
+    }
+
     /// <summary>Convertit une distance en mètres en position X dans le monde.</summary>
     public float MetersToWorldX(float meters)
     {
